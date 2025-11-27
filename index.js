@@ -124,7 +124,8 @@ function wrapHTML(content) {
     <!DOCTYPE html>
     <html>
     <head>
-        <title>🏆 Torneo Local</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>🏆 Torneo Navideño Club Andresito! </title>
         <link rel="stylesheet" href="/styles.css"> 
     </head>
     <body>
@@ -231,7 +232,7 @@ app.get('/tabla', async (req, res) => { // ⬅️ AHORA ES ASYNC
             </tbody>
         </table>
         <br>
-        <a href="/">Volver al registro</a>
+        <a href="/" class ="button">Volver al registro</a>
     `;
 
     res.send(wrapHTML(tablaContent));
@@ -255,8 +256,8 @@ app.get('/login', (req, res) => {
                     <input type="password" id="password" name="password" required>
                     <button type="submit" class="button">Acceder</button>
                 </form>
-                <p><a href="/tabla">🏆 Ir a la Tabla General</a></p>
-                <p><a href="/buscar">🔍 Buscar Jugador</a></p>
+                <p><a href="/tabla" class = "button">🏆 Ir a la Tabla General</a></p>
+                <p><a href="/buscar" class = "button">🔍 Buscar Jugador</a></p>
             </div>
         </body>
         </html>
@@ -281,10 +282,10 @@ app.get('/agregar-jugador', isAuthenticated, (req, res) => {
         <h1>Agregar Nuevo Jugador 👤</h1>
         <form action="/agregar-jugador" method="POST">
             <input type="text" name="nombre" placeholder="Nombre del Jugador" required />
-            <input type="text" name="telefono" placeholder="Teléfono" required />
+            <input type="tel" name="telefono" placeholder="Teléfono" required />
             <button type="submit">Guardar Jugador</button>
         </form>
-        <a href="/">Volver al inicio</a>
+        <a href="/" class ="button">Volver al inicio</a>
     `;
     res.send(wrapHTML(content));
 });
@@ -295,11 +296,11 @@ app.get('/buscar', (req, res) => {
         <h1>🔍 Buscar Historial de Jugador</h1>
         <form action="/resultados" method="GET">
             <label>Ingresa tu número de teléfono:</label>
-            <input type="text" name="telefono" required placeholder="Ej: 5512345678">
+            <input type="tel" name="telefono" required placeholder="Ej: 5512345678">
             <button type="submit">Ver mis partidas</button>
         </form>
         <br>
-        <a href="/">🏠 Volver al inicio</a>
+        <a href="/" class ="button">🏠 Volver al inicio</a>
     `;
     res.send(wrapHTML(content));
 });
@@ -312,7 +313,7 @@ app.get('/resultados', async (req, res) => { // ⬅️ AHORA ES ASYNC
     const jugador = await tablaCollection.findOne({ telefono: telefonoBuscado });
 
     if (!jugador) {
-        const errorContent = `<h2>No encontré ningún jugador con el teléfono ${telefonoBuscado}</h2><a href="/buscar">Intentar de nuevo</a>`;
+        const errorContent = `<h2>No encontré ningún jugador con el teléfono ${telefonoBuscado}</h2><a href="/buscar" class ="button">Intentar de nuevo</a>`;
         return res.send(wrapHTML(errorContent));
     }
     
@@ -345,7 +346,7 @@ app.get('/resultados', async (req, res) => { // ⬅️ AHORA ES ASYNC
             ${listaHTML}
         </ul>
         <br>
-        <a href="/buscar">🔍 Buscar otro</a> | <a href="/">🏠 Inicio</a>
+        <a href="/buscar" class ="button">🔍 Buscar otro</a> | <a href="/" class ="button">🏠 Inicio</a>
     `;
     res.send(wrapHTML(content));
 });
@@ -358,13 +359,13 @@ app.post('/registrar', isAuthenticated, async (req, res) => {
     const perdedor = req.body.perdedor;
 
     if (ganador === perdedor) {
-        const errorContent = `<h2>Error: Ganador ${ganador} no puede ser igual a Perdedor ${perdedor}.</h2><a href="/">Volver</a>`;
+        const errorContent = `<h2>Error: Ganador ${ganador} no puede ser igual a Perdedor ${perdedor}.</h2><a href="/" class = "button">Volver</a>`;
         return res.send(wrapHTML(errorContent));
     }
     
     await registrarPartida(ganador, perdedor); 
 
-    const successContent = `<h2>Partida registrada: ${ganador} ganó a ${perdedor}.</h2><a href="/tabla">Ver tabla</a> | <a href="/">Volver</a>`;
+    const successContent = `<h2>Partida registrada: ${ganador} ganó a ${perdedor}.</h2><a href="/tabla" class ="button">Ver tabla</a> | <a href="/" class = "button">Volver</a>`;
     res.send(wrapHTML(successContent));
 });
 
@@ -372,7 +373,12 @@ app.post('/registrar', isAuthenticated, async (req, res) => {
 app.post('/agregar-jugador', isAuthenticated, async (req, res) => {
     const nombre = req.body.nombre;
     const telefono = req.body.telefono;
-    
+    if (telefono.length !== 10 || isNaN(telefono)) {
+    // Aquí va la acción de error
+    return res.send(wrapHTML(`<h2>Error: El número de teléfono debe tener 10 dígitos.
+        </h2><a href="/agregar-jugador" class ="button">Volver</a>`));
+}
+
     await tablaCollection.insertOne({
         _id: nombre, 
         nombre: nombre,
@@ -381,7 +387,7 @@ app.post('/agregar-jugador', isAuthenticated, async (req, res) => {
         telefono: telefono
     });
 
-    const successContent = `<h2>Jugador Registrado: ${nombre} con número ${telefono}.</h2><a href="/">Volver</a>`;
+    const successContent = `<h2>Jugador Registrado: ${nombre} con número ${telefono}.</h2><a href="/" class = "button">Volver</a>`;
     res.send(wrapHTML(successContent));
 });
 

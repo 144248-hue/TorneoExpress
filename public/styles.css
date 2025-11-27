@@ -186,3 +186,25 @@ button:hover {
     /* Asegura que el cursor indique que es cliqueable */
     cursor: pointer;
 }
+
+/* 📱 Reglas solo para pantallas pequeñas (menos de 600px) */
+@media (max-width: 600px) {
+    .container {
+        width: 95%;       /* Ocupamos casi toda la pantalla */
+        padding: 20px;    /* Reducimos el relleno drásticamente */
+        margin-top: 20px; /* Menos distancia del borde superior */
+    }
+
+    /* Hacemos que los elementos sean fáciles de tocar con el dedo */
+    input, select, button, .button {
+        width: 100%;      /* Ancho completo */
+        box-sizing: border-box; /* Asegura que el padding no rompa el ancho */
+        margin-bottom: 10px; /* Separación vertical */
+    }
+}
+/* Efecto de pulsación táctil */
+button:active, .button:active, input[type="submit"]:active {
+    transform: scale(0.96);      /* Se encoge al 96% de su tamaño */
+    opacity: 0.9;                /* Se vuelve un poco más transparente */
+    transition: transform 0.1s;  /* Suaviza la animación */
+}
