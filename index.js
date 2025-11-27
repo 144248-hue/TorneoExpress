@@ -244,6 +244,7 @@ app.get('/login', (req, res) => {
         <!DOCTYPE html>
         <html lang="es">
         <head>
+             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <meta charset="UTF-8">
             <title>Iniciar Sesión</title>
             <link rel="stylesheet" href="/styles.css">
