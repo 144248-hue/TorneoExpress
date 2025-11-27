@@ -395,14 +395,27 @@ app.get('/resultados', async (req, res) => { // ⬅️ AHORA ES ASYNC
 app.post('/registrar-partida', isAuthenticated, async (req, res) => {
     const ganador = req.body.ganador;
     const perdedor = req.body.perdedor;
+    // 1. 👇 ¡IMPORTANTE! Recibir los marcadores del formulario
+    const mar1 = req.body.mar1; 
+    const mar2 = req.body.mar2;
 
-// 1. Validar que no juegue contra sí mismo
+    // 2. 🛡️ VALIDACIÓN DE MARCADOR (Lo movemos aquí para proteger antes de actuar)
+    if (isNaN(mar1) || isNaN(mar2)) {
+        const errorContent = `
+            <h2>⚠️ Marcador inválido</h2>
+            <p>Por favor ingresa solo números en las carambolas.</p>
+            <a href="/" class="button">Volver</a>
+        `;
+        return res.send(wrapHTML(errorContent));
+    }
+
+    // 3. Validar que no juegue contra sí mismo
     if (ganador === perdedor) {
         const errorContent = `<h2>Error: No puedes jugar contra ti mismo.</h2><a href="/" class="button">Volver</a>`;
         return res.send(wrapHTML(errorContent));
     }
 
-    // 2. 🛡️ EL GUARDIÁN: Verificar historial
+    // 4. 🛡️ EL GUARDIÁN: Verificar historial
     const partidasJugadas = await historialCollection.countDocuments({
         $or: [
             { ganador: ganador, perdedor: perdedor },
@@ -410,7 +423,6 @@ app.post('/registrar-partida', isAuthenticated, async (req, res) => {
         ]
     });
 
-    // Si ya existen 2 registros (ida y vuelta), bloqueamos el 3ro.
     if (partidasJugadas >= 2) {
         const errorContent = `
             <h2>⚠️ Límite alcanzado</h2>
@@ -420,10 +432,12 @@ app.post('/registrar-partida', isAuthenticated, async (req, res) => {
         return res.send(wrapHTML(errorContent));
     }
 
+    // 5. 👇 ¡LA PIEZA PERDIDA! Aquí es donde realmente guardamos en la DB
+    await registrarPartida(ganador, mar1, perdedor, mar2);
+
     const successContent = `<h2>Partida registrada: ${ganador} ganó a ${perdedor}.</h2><a href="/tabla" class ="button">Ver tabla</a> | <a href="/" class = "button">Volver</a>`;
     res.send(wrapHTML(successContent));
 });
-
 // AGREGAR JUGADOR
 app.post('/agregar-jugador', isAuthenticated, async (req, res) => {
     const nombre = req.body.nombre;
