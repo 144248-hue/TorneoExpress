@@ -56,31 +56,54 @@ app.use(express.static('public'));
 // 2. 🧱 CORE LOGIC (Reglas del Negocio)
 // =======================================================
 
-async function registrarPartida(ganador, perdedor) {
-    // 1. Actualizar al Ganador:
+async function registrarPartida(ganador, mar1, perdedor, mar2) {
+
+    // 🛡️ VALIDACIÓN DE MARCADOR
+    // Verificamos que ambos marcadores sean números válidos
+    if (isNaN(mar1) || isNaN(mar2)) {
+        const errorContent = `
+            <h2>⚠️ Marcador inválido</h2>
+            <p>Por favor ingresa solo números en las carambolas.</p>
+            <a href="/" class="button">Volver</a>
+        `;
+        return res.send(wrapHTML(errorContent));
+    }
+    // 1. Actualizar al Ganador 🏆
     await tablaCollection.updateOne(
         { _id: ganador }, 
         { 
-            $inc: { puntos: 3, ganadas: 1 }, 
+            $inc: { 
+                puntos: 3, 
+                ganadas: 1,
+                totalCarambolas: parseInt(mar1), // Aseguramos que sea número
+                partidasJugadas: 1
+            }, 
             $set: { nombre: ganador } 
         },
-        { upsert: true } // Crea el jugador si no existe (aunque debería existir)
+        { upsert: true }
     );
 
-    // 2. Actualizar al Perdedor:
+    // 2. Actualizar al Perdedor 🐢
     await tablaCollection.updateOne(
         { _id: perdedor },
         { 
-            $inc: { puntos: 1 },
+            $inc: { 
+                puntos: 1, 
+                // ganadas: 0, (No es necesario ponerlo)
+                totalCarambolas: parseInt(mar2),
+                partidasJugadas: 1
+            },
             $set: { nombre: perdedor }
         },
         { upsert: true }
     );
 
-    // 3. Registrar la partida en el historial
+    // 3. Registrar en el Historial 📜
     await historialCollection.insertOne({
         ganador: ganador,
+        marcadorGanador: mar1,
         perdedor: perdedor,
+        marcadorPerdedor: mar2,
         fecha: new Date()
     });
 }
@@ -151,27 +174,31 @@ app.get('/', isAuthenticated, async (req, res) => { // ⬅️ AHORA ES ASYNC
                                            .toArray();
 
     // 2. Crear las opciones HTML
-    const opcionesHTML = jugadores.map(jugador => 
+    const nombresOptions = jugadores.map(jugador => 
         `<option value="${jugador.nombre}">${jugador.nombre}</option>`
     ).join('');
 
     const content = `
         <h1>Registrar Partida 🎱</h1>
-        <form action="/registrar" method="POST">
-            <label>Ganador:</label>
-            <select name="ganador" required>
-                <option value="" disabled selected>Selecciona un jugador</option>
-                ${opcionesHTML} 
-            </select>
-            <br><br>
-            <label>Perdedor:</label>
-            <select name="perdedor" required>
-                <option value="" disabled selected>Selecciona un jugador</option>
-                ${opcionesHTML}
-            </select>
-            <br><br>
-            <button type="submit">Registrar Partida</button>
-        </form>
+        <form action="/registrar-partida" method="POST">
+    
+    <h3>🏆 El Ganador</h3>
+    <select name="ganador" class="button" required>
+        <option value="" disabled selected>Selecciona al Ganador</option>
+        ${nombresOptions}
+    </select>
+    <input type="tel" name="mar1" placeholder="Marcador del Ganador" required />
+
+    <hr> <h3>🐢 El Perdedor</h3>
+    <select name="perdedor" class="button" required>
+        <option value="" disabled selected>Selecciona al Perdedor</option>
+        ${nombresOptions}
+    </select>
+    <input type="tel" name="mar2" placeholder="Marcador del Perdedor" required />
+
+    <br><br>
+    <button type="submit" class="button" style="background-color: #28a745;">Registrar Resultado ✅</button>
+</form>
         
         <br>
         <div class="navigation-buttons">
@@ -205,12 +232,21 @@ app.get('/tabla', async (req, res) => { // ⬅️ AHORA ES ASYNC
 
     // 3. GENERACIÓN DE FILAS HTML 
     const filasHTML = jugadores.map((jugador, index) => {
+         let promedio = 0;
+
+    if (jugador.partidasJugadas > 0) {
+
+       promedio=  (jugador.totalCarambolas/jugador.partidasJugadas).toFixed(2)
+
+    }
+
         return `
             <tr>
                 <td>${index + 1}</td>
                 <td>${jugador.nombre}</td>
                 <td>${jugador.puntos}</td>
                 <td>${jugador.ganadas}</td>
+                <td>${promedio}</td> </tr>
             </tr>
         `;
     }).join(''); 
@@ -225,6 +261,7 @@ app.get('/tabla', async (req, res) => { // ⬅️ AHORA ES ASYNC
                     <th>Jugador</th>
                     <th>Puntos</th>
                     <th>Ganadas</th>
+                    <th>Promedio General</th>
                 </tr>
             </thead>
             <tbody>
@@ -355,16 +392,33 @@ app.get('/resultados', async (req, res) => { // ⬅️ AHORA ES ASYNC
 // --- POST (Procesar Datos) ---
 
 // REGISTRAR PARTIDA
-app.post('/registrar', isAuthenticated, async (req, res) => {
+app.post('/registrar-partida', isAuthenticated, async (req, res) => {
     const ganador = req.body.ganador;
     const perdedor = req.body.perdedor;
 
+// 1. Validar que no juegue contra sí mismo
     if (ganador === perdedor) {
-        const errorContent = `<h2>Error: Ganador ${ganador} no puede ser igual a Perdedor ${perdedor}.</h2><a href="/" class = "button">Volver</a>`;
+        const errorContent = `<h2>Error: No puedes jugar contra ti mismo.</h2><a href="/" class="button">Volver</a>`;
         return res.send(wrapHTML(errorContent));
     }
-    
-    await registrarPartida(ganador, perdedor); 
+
+    // 2. 🛡️ EL GUARDIÁN: Verificar historial
+    const partidasJugadas = await historialCollection.countDocuments({
+        $or: [
+            { ganador: ganador, perdedor: perdedor },
+            { ganador: perdedor, perdedor: ganador }
+        ]
+    });
+
+    // Si ya existen 2 registros (ida y vuelta), bloqueamos el 3ro.
+    if (partidasJugadas >= 2) {
+        const errorContent = `
+            <h2>⚠️ Límite alcanzado</h2>
+            <p>Estos jugadores ya completaron sus 2 enfrentamientos.</p>
+            <a href="/" class="button">Volver</a>
+        `;
+        return res.send(wrapHTML(errorContent));
+    }
 
     const successContent = `<h2>Partida registrada: ${ganador} ganó a ${perdedor}.</h2><a href="/tabla" class ="button">Ver tabla</a> | <a href="/" class = "button">Volver</a>`;
     res.send(wrapHTML(successContent));

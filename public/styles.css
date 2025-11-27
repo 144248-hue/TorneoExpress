@@ -1,15 +1,66 @@
-/* Estilos Generales para el cuerpo de la página */
+/* 1. Aseguramos que la raíz ocupe todo el alto */
+html {
+    height: 100%;
+}
+
+/* 2. Estilos del Cuerpo */
+/* 1. Configuración base */
+html {
+    height: 100%;
+}
+
 body {
-    font-family: Onepiece , sans-serif; /* ✒️ Fuente legible */
-    background-color: #f4f7f6; /* 💡 Un color de fondo suave */
-    color: #333;
+    position: relative;
+    min-height: 100vh;
     margin: 0;
     padding: 0;
-    display: flex; /* Centramos el contenido principal */
+    font-family: 'Arial', sans-serif; /* Usamos una fuente estándar por ahora */
+    color: #333;
+    
+    /* Centrado Flexbox */
+    display: flex;
     flex-direction: column;
     align-items: center;
-    min-height: 100vh; /* Ocupa al menos la altura completa de la vista */
+    
+    /* IMPORTANTE: Fondo transparente para ver la imagen detrás */
+    background-color: transparent; 
+}
 
+/* 2. El Fondo de Billar (Pseudo-elemento) */
+body::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    
+    /* Imagen de paño verde */
+    background-image: url('https://images.unsplash.com/photo-1579619623836-8c9e6db58339?q=80&w=1920&auto=format&fit=crop');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    
+    /* Ajustes visuales */
+    opacity: 0.2;  /* Baja opacidad para no molestar */
+    z-index: -1;   /* Se queda al fondo */
+}
+
+/* 3. Tus estilos de botones (Mantenemos lo que ya tenías) */
+.button {
+    display: inline-block;
+    padding: 10px 20px;
+    margin: 10px;
+    background-color: #007bff;
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+    border: none;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+/* Efecto al tocar en móvil */
+.button:active {
+    transform: scale(0.96);
+    opacity: 0.9;
 }
 
 /* Contenedor principal para dar un margen y un fondo blanco */
