@@ -1,0 +1,188 @@
+/* Estilos Generales para el cuerpo de la página */
+body {
+    font-family: Onepiece , sans-serif; /* ✒️ Fuente legible */
+    background-color: #f4f7f6; /* 💡 Un color de fondo suave */
+    color: #333;
+    margin: 0;
+    padding: 0;
+    display: flex; /* Centramos el contenido principal */
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh; /* Ocupa al menos la altura completa de la vista */
+
+}
+
+/* Contenedor principal para dar un margen y un fondo blanco */
+.container {
+    background-color: #fff;
+    padding: 30px 50px;
+    border-radius: 9px; /* Bordes redondeados */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Sombra sutil */
+    margin-top: 50px;
+    max-width: 600px;
+    width: 90%;
+    text-align: center;
+}
+
+form {
+    /* Para centrar los formularios en el contenedor */
+    margin: 0 auto; 
+    max-width: 500px; /* Ancho máximo para que no se estire demasiado */
+    padding: 20px;
+    /* border: 1px solid #eee; /* Opcional: un borde suave para delimitar */ 
+    border-radius: 9px;
+    background-color: #fdfdfd; /* Un fondo ligeramente diferente para los formularios */
+    margin-bottom: 20px; /* Separación entre formularios */
+}
+
+/* Para que los labels estén alineados a la izquierda dentro del formulario */
+form label {
+    display: block; /* Cada label en su propia línea */
+    text-align: left; /* Alinea el texto del label a la izquierda */
+    margin-bottom: 5px; /* Espacio debajo del label */
+    font-weight: bold;
+}
+
+/* Asegura que los input y select ocupen todo el ancho dentro del formulario */
+form input[type="text"],
+form select {
+    width: 100%; /* Ocupa todo el ancho disponible */
+    padding: 10px; /* Espacio interno */
+    margin-bottom: 15px; /* Espacio debajo del campo */
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box; /* Incluye padding y border en el ancho total */
+}
+
+/* Estilo para los botones de navegación */
+.navigation-buttons .button {
+    width: 95%;
+    display: block;
+    margin-bottom: 10px;    
+    font-size: 0.95em;
+    margin-top: 20px; /* Un poco de espacio arriba */
+    display: flex; /* Usamos flexbox para una mejor distribución */
+    flex-wrap: wrap; /* Si no caben, se envuelven */
+    padding: 15px 25px;
+    justify-content: center; /* Centra los botones horizontalmente */
+    gap: 15px; /* Espacio entre los botones */
+    padding-bottom: 20px; /* Espacio debajo del grupo de botones */
+    border-bottom: 1px solid #eee; /* Línea divisoria suave */
+    margin-bottom: 20px; /* Espacio después de la línea divisoria */
+    text-decoration: none;
+}
+
+/* Estilo para el botón rojo de deshacer */
+.red-button {
+    background-color: #dc3545 !important; /* Rojo para deshacer, !important para sobrescribir */
+    color: white;
+    border: none;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.red-button:hover {
+    background-color: #c82333 !important; /* Rojo más oscuro al pasar el ratón */
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Estilos para los botones y enlaces */
+button, a.button {
+    background-color: #006effb9;
+    color: white;
+    padding: 25px, 25px;
+    border: none;   
+    border-radius: 5px;
+    cursor: pointer;
+    text-decoration: none; /* Quitamos el subrayado de los enlaces */
+    display: inline-block;
+    transition: background-color 0.3s;
+}
+
+button:hover, a.button:hover {
+    background-color: #0056b3;
+}
+
+/* Estilo para listas */
+ul {
+    list-style-type: none; /* 🚫 Quitamos las viñetas por defecto */
+    padding: 0;
+}
+
+li {
+    background-color: #e9ecef;
+    margin: 5px 0;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+/* Estilos para la tabla en general */
+.leaderboard {
+    width: 100%; /* 📏 Ocupa todo el ancho del contenedor */
+    border-collapse: collapse; /* 🤝 Fusiona los bordes de las celdas */
+    margin-top: 20px;
+}
+
+/* Estilos para las celdas y encabezados (th y td) */
+.leaderboard th, .leaderboard td {
+    border: 1px solid #ddd;
+    padding: 12px;
+    text-align: left;
+}
+
+/* Estilos para el encabezado */
+.leaderboard thead th {
+    background-color: #007bff; /* Color primario del tema */
+    color: white;
+}
+
+/* 💡 ESTILO ZEBRA-STRIPING */
+/* Aplicamos un color de fondo diferente a las filas impares */
+.leaderboard tbody tr:nth-child(odd) {
+    background-color: #f2f2f2;
+}
+
+/* Estilo para los campos de texto, selectores y botones */
+input[type="text"], 
+select, 
+button {
+    /* Tu radio elegido */
+    border-radius: 9px; 
+    
+    /* Añadimos espaciado para hacerlos más cómodos */
+    padding: 10px 15px; 
+    
+    /* Borde sutil para que los campos de texto y selectores se vean uniformes */
+    border: 1px solid #ccc; 
+    
+    /* Aseguramos que el padding no desborde el ancho total */
+    box-sizing: border-box;
+    
+    /* Margen para separarlos un poco */
+    margin-bottom: 15px;
+    
+    /* Esto es importante, el cursor cambia al texto normal en vez de 'text-input' */
+    cursor: pointer;
+}
+
+/* 1. Estilo para el botón base */
+button {
+    /* Color principal de la aplicación */
+    background-color: #007bff; 
+    color: white; 
+    border: none; /* Elimina el borde gris que añadimos antes */
+    
+    /* Agregamos una transición para que los cambios sean suaves */
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* 2. Estilo al pasar el ratón (Realce) */
+button:hover {
+    /* Oscurece el azul ligeramente */
+    background-color: #0056b3; 
+    
+    /* Añade una sombra para simular que el botón se "levanta" */
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2); 
+    
+    /* Asegura que el cursor indique que es cliqueable */
+    cursor: pointer;
+}
