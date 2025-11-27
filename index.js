@@ -109,32 +109,50 @@ async function registrarPartida(ganador, mar1, perdedor, mar2) {
 }
 
 async function deshacerPartida() {
-    // 1. Buscar la última partida (la más reciente)
+    // 1. Buscar la última partida
     const ultimaPartida = await historialCollection.findOne(
         {}, 
-        { sort: { fecha: -1 } } // Ordenar por fecha (más reciente primero)
+        { sort: { fecha: -1 } } 
     );
 
     if (ultimaPartida) {
         const ganador = ultimaPartida.ganador;
         const perdedor = ultimaPartida.perdedor;
+        
+        // 👇 RECUPERAMOS LOS MARCADORES ORIGINALES
+        // (Si son undefined por ser partida antigua, usamos 0 para no romper la resta)
+        const ptsGanador = ultimaPartida.marcadorGanador || 0;
+        const ptsPerdedor = ultimaPartida.marcadorPerdedor || 0;
 
-        // 2. Revertir puntos al Ganador
+        // 2. Revertir al Ganador ⏪
         await tablaCollection.updateOne(
             { _id: ganador },
-            { $inc: { puntos: -3, ganadas: -1 } }
+            { 
+                $inc: { 
+                    puntos: -3, 
+                    ganadas: -1,
+                    partidasJugadas: -1,          // Restamos la partida
+                    totalCarambolas: -ptsGanador  // Restamos sus carambolas
+                } 
+            }
         );
 
-        // 3. Revertir puntos al Perdedor
+        // 3. Revertir al Perdedor ⏪
         await tablaCollection.updateOne(
             { _id: perdedor },
-            { $inc: { puntos: -1 } }
+            { 
+                $inc: { 
+                    puntos: -1, 
+                    partidasJugadas: -1,          // Restamos la partida
+                    totalCarambolas: -ptsPerdedor // Restamos sus carambolas
+                } 
+            }
         );
 
-        // 4. Eliminar el registro de la partida
+        // 4. Eliminar el registro
         await historialCollection.deleteOne({ _id: ultimaPartida._id });
         
-        console.log("Deshaciendo partida:", ultimaPartida);
+        console.log(`Deshaciendo partida: ${ganador} (${ptsGanador}) vs ${perdedor} (${ptsPerdedor})`);
     }
 }
 
