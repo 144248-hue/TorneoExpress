@@ -4,7 +4,7 @@
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 
 // --- Variables de Conexión a MongoDB ---
 const uri = process.env.MONGO_URI;
@@ -222,7 +222,7 @@ app.get('/', isAuthenticated, async (req, res) => { // ⬅️ AHORA ES ASYNC
         <div class="navigation-buttons">
             <a href="/agregar-jugador" class="button">👤 Agregar Nuevo Jugador</a>
             <a href="/tabla" class="button">🏆 Ver Tabla de Posiciones</a>
-            <a href="/buscar" class="button">🔍 Buscar Jugador</a>
+            <a href="/editar" class="button" style="background-color: #d9534f;">🛠️ Editar Partidas</a>
         </div>
 
         <form action="/deshacer" method="POST">
@@ -263,7 +263,7 @@ app.get('/tabla', async (req, res) => { // ⬅️ AHORA ES ASYNC
                 <td>${index + 1}</td>
                 <td>${jugador.nombre}</td>
                 <td>${jugador.puntos}</td>
-                <td>${jugador.ganadas}</td>
+                <td>${jugador.partidasJugadas}</td>
                 <td>${promedio}</td> </tr>
             </tr>
         `;
@@ -278,7 +278,7 @@ app.get('/tabla', async (req, res) => { // ⬅️ AHORA ES ASYNC
                     <th>#</th>
                     <th>Jugador</th>
                     <th>Puntos</th>
-                    <th>Ganadas</th>
+                    <th>Jugadas</th>
                     <th>Promedio General</th>
                 </tr>
             </thead>
@@ -286,6 +286,14 @@ app.get('/tabla', async (req, res) => { // ⬅️ AHORA ES ASYNC
                 ${filasHTML}
             </tbody>
         </table>
+
+        <div style="margin-top: 20px; padding: 15px; background-color: #fff3cd; border: 1px solid #ffeeba; border-radius: 5px; color: #856404; max-width: 90%;">
+            <strong>⚠️ REGLA DE CLASIFICACIÓN:</strong>
+            <p style="margin: 5px 0; font-weight: bold;">
+                "Calificarán únicamente los 8 mejores puntajes que tengan más de 40 partidas o los 8 con más partidas."
+            </p>
+        </div>
+        
         <br>
         <a href="/" class ="button">Volver al registro</a>
     `;
@@ -318,6 +326,153 @@ app.get('/login', (req, res) => {
         </body>
         </html>
     `);
+});
+
+// ==========================================
+// 🛠️ RUTA: AUDITORÍA Y EDICIÓN (SOLO ADMIN)
+// ==========================================
+app.get('/editar', isAuthenticated, async (req, res) => {
+    // 1. Recuperamos la lista actualizada de jugadores
+    const jugadores = await tablaCollection.find().sort({ nombre: 1 }).toArray();
+    
+    // 2. Generamos las opciones del select
+    const nombresOptions = jugadores.map(j => `<option value="${j._id}">${j.nombre}</option>`).join('');
+
+    const content = `
+        <h2 style="color: #d9534f;">🛠️ Modo Edición / Auditoría</h2>
+        <p>Selecciona un jugador para corregir o eliminar partidas específicas.</p>
+        
+        <form action="/resultados-editar" method="GET">
+            <label>Jugador a auditar:</label>
+            <br>
+            <select name="jugador" class="button" required>
+                <option value="" disabled selected>Selecciona un Jugador</option>
+                ${nombresOptions}
+            </select>
+            <br><br>
+            <button type="submit" class="button" style="background-color: #d9534f;">Buscar para Editar</button>
+        </form>
+        <br>
+        <a href="/" class="button">🏠 Volver al inicio</a>
+    `;
+
+    res.send(wrapHTML(content));
+});
+
+// ==========================================
+// 📄 RUTA: RESULTADOS PARA EDICIÓN
+// ==========================================
+app.get('/resultados-editar', isAuthenticated, async (req, res) => {
+    const jugadorId = req.query.jugador;
+
+    // Búsqueda con $or: ¿Ganó O Perdió?
+    const partidas = await historialCollection.find({
+        $or: [
+            { ganador: jugadorId },
+            { perdedor: jugadorId }
+        ]
+    }).sort({ fecha: -1 }).toArray();
+
+    if (partidas.length === 0) {
+        return res.send(wrapHTML(`
+            <h2>El jugador ${jugadorId} no tiene partidas registradas.</h2>
+            <a href="/editar" class="button">Volver a intentar</a>
+        `));
+    }
+
+    const listaHTML = partidas.map(p => {
+        const esGanador = p.ganador === jugadorId;
+        const resultadoTexto = esGanador ? "🏆 GANÓ" : "🐢 PERDIÓ";
+        const colorFondo = esGanador ? "#d4edda" : "#f8d7da";
+        const rival = esGanador ? p.perdedor : p.ganador;
+        const marcador = `${p.marcadorGanador || 0} - ${p.marcadorPerdedor || 0}`;
+        const fechaFormateada = new Date(p.fecha).toLocaleString();
+
+        // Botón rojo que apunta a la eliminación específica
+        return `
+            <div style="background-color: ${colorFondo}; border: 1px solid #ccc; padding: 15px; margin: 10px auto; max-width: 500px; border-radius: 8px;">
+                <p><strong>${resultadoTexto}</strong> contra <strong>${rival}</strong></p>
+                <p style="font-size: 1.2em;">🎱 Marcador: ${marcador}</p>
+                <p><small>📅 ${fechaFormateada}</small></p>
+                
+                <form action="/eliminar-especifica" method="POST" onsubmit="return confirm('⚠️ ¿Borrar esta partida? Se restarán los puntos a ambos.');">
+                    <input type="hidden" name="idPartida" value="${p._id}">
+                    <button type="submit" style="background-color: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer;">
+                        🗑️ Borrar esta partida
+                    </button>
+                </form>
+            </div>
+        `;
+    }).join('');
+
+    res.send(wrapHTML(`
+        <h2 style="color: #d9534f;">Editando a: ${jugadorId}</h2>
+        ${listaHTML}
+        <br>
+        <a href="/editar" class="button">🔍 Auditar otro</a>
+        <a href="/" class="button">🏠 Inicio</a>
+    `));
+});
+
+
+// ==========================================
+// 🗑️ RUTA: ELIMINAR PARTIDA ESPECÍFICA
+// ==========================================
+app.post('/eliminar-especifica', isAuthenticated, async (req, res) => {
+    const idPartida = req.body.idPartida;
+
+    try {
+        // 1. Buscamos la partida antes de borrarla para saber qué restar
+        const partida = await historialCollection.findOne({ _id: new ObjectId(idPartida) });
+
+        if (!partida) {
+            return res.send(wrapHTML('<h2>Error: No se encontró la partida.</h2><a href="/editar" class="button">Volver</a>'));
+        }
+
+        const { ganador, perdedor, marcadorGanador, marcadorPerdedor } = partida;
+
+        // 2. Restamos los puntos al GANADOR
+        await tablaCollection.updateOne(
+            { _id: ganador },
+            { 
+                $inc: { 
+                    puntos: -3, 
+                    ganadas: -1, 
+                    partidasJugadas: -1,
+                    totalCarambolas: -marcadorGanador // Restamos sus carambolas exactas
+                } 
+            }
+        );
+
+        // 3. Restamos los puntos al PERDEDOR
+        await tablaCollection.updateOne(
+            { _id: perdedor },
+            { 
+                $inc: { 
+                    puntos: -1, 
+                    partidasJugadas: -1,
+                    totalCarambolas: -marcadorPerdedor 
+                } 
+            }
+        );
+
+        // 4. Finalmente, eliminamos el registro del historial
+        await historialCollection.deleteOne({ _id: new ObjectId(idPartida) });
+
+        // 5. Confirmación
+        const successContent = `
+            <h2 style="color: #dc3545;">🗑️ Partida eliminada correctamente</h2>
+            <p>Se han revertido los puntos de <strong>${ganador}</strong> y <strong>${perdedor}</strong>.</p>
+            <br>
+            <a href="/resultados-editar?jugador=${ganador}" class="button">Seguir editando a ${ganador}</a>
+            <a href="/editar" class="button">🔍 Buscar otro</a>
+        `;
+        res.send(wrapHTML(successContent));
+
+    } catch (error) {
+        console.error(error);
+        res.send(wrapHTML('<h2>Ocurrió un error técnico al intentar borrar.</h2><a href="/editar" class="button">Volver</a>'));
+    }
 });
 
 app.post('/login', (req, res) => {
