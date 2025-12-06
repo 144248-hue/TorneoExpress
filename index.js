@@ -6,6 +6,8 @@ const express = require('express');
 const session = require('express-session');
 const { MongoClient, ObjectId } = require('mongodb');
 
+
+
 // --- Variables de Conexión a MongoDB ---
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
@@ -168,6 +170,19 @@ function wrapHTML(content) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>🏆 Torneo Navideño Club Andresito! </title>
         <link rel="stylesheet" href="/styles.css"> 
+
+        <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+        
+        <script>
+            // Este pequeño script activa el buscador en todos los menús
+            $(document).ready(function() {
+                $('.buscador-select').select2({
+                    width: '100%' // Para que se ajuste al celular
+                });
+            });
+        </script>
     </head>
     <body>
         <div class="container">
@@ -201,15 +216,15 @@ app.get('/', isAuthenticated, async (req, res) => { // ⬅️ AHORA ES ASYNC
         <form action="/registrar-partida" method="POST">
     
     <h3>🏆 El Ganador</h3>
-    <select name="ganador" class="button" required>
-        <option value="" disabled selected>Selecciona al Ganador</option>
+    <select name="ganador" class="buscador-select" data-placeholder="Selecciona al Ganador" required>
+        <option></option>
         ${nombresOptions}
     </select>
     <input type="tel" name="mar1" placeholder="Marcador del Ganador" required />
 
     <hr> <h3>🐢 El Perdedor</h3>
-    <select name="perdedor" class="button" required>
-        <option value="" disabled selected>Selecciona al Perdedor</option>
+    <select name="perdedor" class="buscador-select" data-placeholder="Selecciona al Perdedor" required>
+        <option></option>
         ${nombresOptions}
     </select>
     <input type="tel" name="mar2" placeholder="Marcador del Perdedor" required />
@@ -235,70 +250,87 @@ app.get('/', isAuthenticated, async (req, res) => { // ⬅️ AHORA ES ASYNC
     res.send(wrapHTML(content));
 });
 
-// TABLA DE POSICIONES
-app.get('/tabla', async (req, res) => { // ⬅️ AHORA ES ASYNC
-    // 1. Obtener todos los jugadores de MongoDB
-    const jugadores = await tablaCollection.find().toArray(); 
+// VER TABLA GENERAL (CON REGLA DE RESERVA TOP 8)
+app.get('/tabla', async (req, res) => {
+    // 1. Traemos a TODOS los jugadores
+    let todos = await tablaCollection.find().toArray();
 
-    // 2. Ordenamiento: puntos (desc), luego ganadas (desc)
-    jugadores.sort((a, b) => {
-        if (a.puntos !== b.puntos) {
-            return b.puntos - a.puntos;
+    // 2. Función auxiliar para ordenar por Puntos (y luego por Ganadas si empatan)
+    const ordenarPorPuntos = (a, b) => {
+        if (b.puntos !== a.puntos) return b.puntos - a.puntos;
+        return (b.ganadas || 0) - (a.ganadas || 0);
+    };
+
+    // 3. SEPARAMOS LOS GRUPOS
+    // Grupo A: Tienen más de 32 juegos (Elegibles para el Top 8)
+    let elegibles = todos.filter(j => (j.partidasJugadas || 0) >= 32);
+    // Grupo B: Tienen 32 o menos
+    let resto = todos.filter(j => (j.partidasJugadas || 0) <= 31);
+
+    // 4. ORDENAMOS INTERNAMENTE
+    elegibles.sort(ordenarPorPuntos);
+    resto.sort(ordenarPorPuntos);
+
+    // 5. CONSTRUIMOS EL RANKING FINAL
+    let top8 = elegibles.slice(0, 8); // Tomamos los mejores 8 elegibles
+    let sobranElegibles = elegibles.slice(8); // Los que quedaron fuera del top 8
+    
+    // Unimos los que sobraron con el resto normal y volvemos a ordenar ese bloque
+    let restoFinal = [...sobranElegibles, ...resto].sort(ordenarPorPuntos);
+
+    // La lista definitiva
+    const rankingFinal = [...top8, ...restoFinal];
+
+    // 6. GENERAMOS EL HTML
+    const filasTabla = rankingFinal.map((jugador, index) => {
+        let promedio = 0;
+        if (jugador.partidasJugadas > 0) {
+           promedio = (jugador.totalCarambolas / jugador.partidasJugadas).toFixed(2);
         }
-        return b.ganadas - a.ganadas; 
-    });
 
-    // 3. GENERACIÓN DE FILAS HTML 
-    const filasHTML = jugadores.map((jugador, index) => {
-         let promedio = 0;
-
-    if (jugador.partidasJugadas > 0) {
-
-       promedio=  (jugador.totalCarambolas/jugador.partidasJugadas).toFixed(2)
-
-    }
+        // Un detalle visual: Una línea divisoria después del lugar 8
+        const estiloExtra = (index === 7) ? 'border-bottom: 3px solid #d9534f;' : '';
 
         return `
-            <tr>
+            <tr style="${estiloExtra}">
                 <td>${index + 1}</td>
                 <td>${jugador.nombre}</td>
                 <td>${jugador.puntos}</td>
-                <td>${jugador.partidasJugadas}</td>
-                <td>${promedio}</td> </tr>
+                <td>${jugador.partidasJugadas || 0}</td>
+                <td>${promedio}</td>
             </tr>
         `;
-    }).join(''); 
+    }).join('');
 
-    // 4. Construimos el contenido final de la tabla
-    const tablaContent = `
-        <h1>🏆 Tabla de Posiciones</h1>
-        <table class="leaderboard">
+    const content = `
+        <h2>🏆 Tabla General</h2>
+        <table class= "leaderboard">
             <thead>
                 <tr>
-                    <th>#</th>
-                    <th>Jugador</th>
-                    <th>Puntos</th>
+                    <th>Pos</th>
+                    <th>Nombre</th>
+                    <th>Pts</th>
                     <th>Jugadas</th>
-                    <th>Promedio General</th>
+                    <th>Promedio</th>
                 </tr>
             </thead>
             <tbody>
-                ${filasHTML}
+                ${filasTabla}
             </tbody>
         </table>
 
-        <div style="margin-top: 20px; padding: 15px; background-color: #fff3cd; border: 1px solid #ffeeba; border-radius: 5px; color: #856404; max-width: 90%;">
-            <strong>⚠️ REGLA DE CLASIFICACIÓN:</strong>
-            <p style="margin: 5px 0; font-weight: bold;">
-                "Calificarán únicamente los 8 mejores puntajes que tengan más de 40 partidas o los 8 con más partidas."
+        <div style="margin-top: 20px; padding: 15px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 5px; color: #155724; max-width: 90%;">
+            <strong>⚠️ NUEVA REGLA ACTIVA:</strong>
+            <p style="margin: 5px 0;">
+                Los primeros 8 lugares están reservados EXCLUSIVAMENTE para jugadores con <strong>más de 32 partidas</strong>.
             </p>
         </div>
-        
+
         <br>
-        <a href="/" class ="button">Volver al registro</a>
+        <a href="/" class="button">🏠 Volver al inicio</a>
     `;
 
-    res.send(wrapHTML(tablaContent));
+    res.send(wrapHTML(content));
 });
 
 // LOGIN
@@ -345,8 +377,8 @@ app.get('/editar', isAuthenticated, async (req, res) => {
         <form action="/resultados-editar" method="GET">
             <label>Jugador a auditar:</label>
             <br>
-            <select name="jugador" class="button" required>
-                <option value="" disabled selected>Selecciona un Jugador</option>
+            <select name="jugador" class="buscador-select" data-placeholder="Selecciona un Jugador" required>
+        <option></option>
                 ${nombresOptions}
             </select>
             <br><br>
@@ -362,10 +394,13 @@ app.get('/editar', isAuthenticated, async (req, res) => {
 // ==========================================
 // 📄 RUTA: RESULTADOS PARA EDICIÓN
 // ==========================================
+// ==========================================
+// 📄 RUTA: RESULTADOS PARA EDICIÓN (CON SELECCIÓN MÚLTIPLE)
+// ==========================================
 app.get('/resultados-editar', isAuthenticated, async (req, res) => {
     const jugadorId = req.query.jugador;
 
-    // Búsqueda con $or: ¿Ganó O Perdió?
+    // Búsqueda normal...
     const partidas = await historialCollection.find({
         $or: [
             { ganador: jugadorId },
@@ -380,6 +415,7 @@ app.get('/resultados-editar', isAuthenticated, async (req, res) => {
         `));
     }
 
+    // 👇 1. GENERAMOS LOS ITEMS DE LA LISTA (Ahora con Checkbox)
     const listaHTML = partidas.map(p => {
         const esGanador = p.ganador === jugadorId;
         const resultadoTexto = esGanador ? "🏆 GANÓ" : "🐢 PERDIÓ";
@@ -388,26 +424,42 @@ app.get('/resultados-editar', isAuthenticated, async (req, res) => {
         const marcador = `${p.marcadorGanador || 0} - ${p.marcadorPerdedor || 0}`;
         const fechaFormateada = new Date(p.fecha).toLocaleString();
 
-        // Botón rojo que apunta a la eliminación específica
         return `
-            <div style="background-color: ${colorFondo}; border: 1px solid #ccc; padding: 15px; margin: 10px auto; max-width: 500px; border-radius: 8px;">
-                <p><strong>${resultadoTexto}</strong> contra <strong>${rival}</strong></p>
-                <p style="font-size: 1.2em;">🎱 Marcador: ${marcador}</p>
-                <p><small>📅 ${fechaFormateada}</small></p>
+            <div style="background-color: ${colorFondo}; border: 1px solid #ccc; padding: 10px; margin: 10px auto; max-width: 500px; border-radius: 8px; display: flex; align-items: center;">
                 
-                <form action="/eliminar-especifica" method="POST" onsubmit="return confirm('⚠️ ¿Borrar esta partida? Se restarán los puntos a ambos.');">
-                    <input type="hidden" name="idPartida" value="${p._id}">
-                    <button type="submit" style="background-color: #dc3545; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer;">
-                        🗑️ Borrar esta partida
-                    </button>
-                </form>
+                <div style="margin-right: 15px;">
+                    <input type="checkbox" name="idsPartidas" value="${p._id}" style="transform: scale(1.5);">
+                </div>
+
+                <div style="flex-grow: 1;">
+                    <p style="margin: 5px 0;"><strong>${resultadoTexto}</strong> contra <strong>${rival}</strong></p>
+                    <p style="margin: 5px 0; font-size: 1.1em;">🎱 ${marcador}</p>
+                    <p style="margin: 5px 0;"><small>📅 ${fechaFormateada}</small></p>
+                </div>
             </div>
         `;
     }).join('');
 
+    // 👇 2. ENVOLVEMOS TODO EN UN SOLO FORMULARIO GIGANTE
+    // Apuntamos a una nueva ruta: /eliminar-multiples
     res.send(wrapHTML(`
         <h2 style="color: #d9534f;">Editando a: ${jugadorId}</h2>
-        ${listaHTML}
+        <p>Selecciona las partidas que deseas eliminar:</p>
+        
+        <form action="/eliminar-multiples" method="POST" onsubmit="return confirm('⚠️ ¿Estás seguro de eliminar TODAS las partidas seleccionadas? Se revertirán los puntos.');">
+            
+            <input type="hidden" name="jugadorOriginal" value="${jugadorId}">
+            
+            ${listaHTML}
+            
+            <br>
+            <div style="position: sticky; bottom: 20px; text-align: center;">
+                <button type="submit" class="button" style="background-color: #dc3545; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
+                    🗑️ Borrar Seleccionados
+                </button>
+            </div>
+        </form>
+
         <br>
         <a href="/editar" class="button">🔍 Auditar otro</a>
         <a href="/" class="button">🏠 Inicio</a>
@@ -472,6 +524,82 @@ app.post('/eliminar-especifica', isAuthenticated, async (req, res) => {
     } catch (error) {
         console.error(error);
         res.send(wrapHTML('<h2>Ocurrió un error técnico al intentar borrar.</h2><a href="/editar" class="button">Volver</a>'));
+    }
+});
+
+// ==========================================
+// 🗑️ RUTA: ELIMINAR MÚLTIPLES (BATCH DELETE)
+// ==========================================
+app.post('/eliminar-multiples', isAuthenticated, async (req, res) => {
+    let idsPartidas = req.body.idsPartidas;
+    const jugadorOriginal = req.body.jugadorOriginal;
+
+    // VALIDACIÓN: Si no seleccionó nada, volver
+    if (!idsPartidas) {
+        return res.redirect(`/resultados-editar?jugador=${jugadorOriginal}`);
+    }
+
+    // TRUCO: Si solo seleccionó uno, HTML lo envía como texto, no como lista.
+    // Esto lo convierte siempre en lista para que el bucle funcione.
+    if (!Array.isArray(idsPartidas)) {
+        idsPartidas = [idsPartidas];
+    }
+
+    try {
+        // Tu bucle corregido 🔄
+        for (let i = 0; i < idsPartidas.length; i++) {
+            const id = idsPartidas[i];
+
+            // 1. Buscar la partida para saber qué restar
+            const partida = await historialCollection.findOne({ _id: new ObjectId(id) });
+
+            if (partida) {
+                const { ganador, perdedor, marcadorGanador, marcadorPerdedor } = partida;
+
+                // 2. Restar al GANADOR
+                await tablaCollection.updateOne(
+                    { _id: ganador },
+                    { 
+                        $inc: { 
+                            puntos: -3, 
+                            ganadas: -1, 
+                            partidasJugadas: -1, 
+                            totalCarambolas: -marcadorGanador 
+                        } 
+                    }
+                );
+
+                // 3. Restar al PERDEDOR
+                await tablaCollection.updateOne(
+                    { _id: perdedor },
+                    { 
+                        $inc: { 
+                            puntos: -1, 
+                            partidasJugadas: -1, 
+                            totalCarambolas: -marcadorPerdedor 
+                        } 
+                    }
+                );
+
+                // 4. Eliminar el registro
+                await historialCollection.deleteOne({ _id: new ObjectId(id) });
+            }
+        }
+
+        // ÉXITO
+        const successContent = `
+            <h2 style="color: #dc3545;">🗑️ Partidas eliminadas</h2>
+            <p>Se han borrado ${idsPartidas.length} registros y actualizado los puntos.</p>
+            <br>
+            <a href="/resultados-editar?jugador=${jugadorOriginal}" class="button">
+                Seguir editando a ${jugadorOriginal}
+            </a>
+        `;
+        res.send(wrapHTML(successContent));
+
+    } catch (error) {
+        console.error(error);
+        res.send(wrapHTML('<h2>Error técnico al borrar múltiples.</h2><a href="/editar" class="button">Volver</a>'));
     }
 });
 
