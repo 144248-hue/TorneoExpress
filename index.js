@@ -250,36 +250,43 @@ app.get('/', isAuthenticated, async (req, res) => { // ⬅️ AHORA ES ASYNC
     res.send(wrapHTML(content));
 });
 
-// VER TABLA GENERAL (CON REGLA DE RESERVA TOP 8)
+// ==========================================
+// 🏆 RUTA: VER TABLA GENERAL (CON REGLA TOP 8 + REEMPLAZOS)
+// ==========================================
 app.get('/tabla', async (req, res) => {
     // 1. Traemos a TODOS los jugadores
     let todos = await tablaCollection.find().toArray();
 
-    // 2. Función auxiliar para ordenar por Puntos (y luego por Ganadas si empatan)
+    // 2. Función auxiliar para ordenar por Puntos
     const ordenarPorPuntos = (a, b) => {
         if (b.puntos !== a.puntos) return b.puntos - a.puntos;
         return (b.ganadas || 0) - (a.ganadas || 0);
     };
 
     // 3. SEPARAMOS LOS GRUPOS
-    // Grupo A: Tienen más de 32 juegos (Elegibles para el Top 8)
+    // Grupo A: Tienen 32 o más juegos (Elegibles para Top 8 y Reemplazos)
     let elegibles = todos.filter(j => (j.partidasJugadas || 0) >= 32);
-    // Grupo B: Tienen 32 o menos
-    let resto = todos.filter(j => (j.partidasJugadas || 0) <= 31);
+    // Grupo B: Tienen menos de 32
+    let resto = todos.filter(j => (j.partidasJugadas || 0) < 32);
 
     // 4. ORDENAMOS INTERNAMENTE
     elegibles.sort(ordenarPorPuntos);
     resto.sort(ordenarPorPuntos);
 
-    // 5. CONSTRUIMOS EL RANKING FINAL
-    let top8 = elegibles.slice(0, 8); // Tomamos los mejores 8 elegibles
-    let sobranElegibles = elegibles.slice(8); // Los que quedaron fuera del top 8
+    // 5. CONSTRUIMOS EL RANKING FINAL POR NIVELES
     
-    // Unimos los que sobraron con el resto normal y volvemos a ordenar ese bloque
+    // Nivel 1: Los 8 Finalistas
+    let top8 = elegibles.slice(0, 8);
+    
+    // Nivel 2: Los 2 Reemplazos (lugares 9 y 10)
+    let reemplazos = elegibles.slice(8, 10); 
+    
+    // Nivel 3: El resto (los que sobraron de elegibles + los que no tienen 32 juegos)
+    let sobranElegibles = elegibles.slice(10); 
     let restoFinal = [...sobranElegibles, ...resto].sort(ordenarPorPuntos);
 
-    // La lista definitiva
-    const rankingFinal = [...top8, ...restoFinal];
+    // Unimos las tres capas
+    const rankingFinal = [...top8, ...reemplazos, ...restoFinal];
 
     // 6. GENERAMOS EL HTML
     const filasTabla = rankingFinal.map((jugador, index) => {
@@ -288,8 +295,17 @@ app.get('/tabla', async (req, res) => {
            promedio = (jugador.totalCarambolas / jugador.partidasJugadas).toFixed(2);
         }
 
-        // Un detalle visual: Una línea divisoria después del lugar 8
-        const estiloExtra = (index === 7) ? 'border-bottom: 3px solid #d9534f;' : '';
+        // LÓGICA VISUAL DE LAS LÍNEAS
+        let estiloExtra = '';
+        
+        // Línea ROJA después del lugar 8 (índice 7)
+        if (index === 7) { 
+            estiloExtra = 'border-bottom: 3px solid #d9534f;'; 
+        }
+        // Línea VERDE después del lugar 10 (índice 9)
+        else if (index === 9) {
+            estiloExtra = 'border-bottom: 3px solid #28a745;'; 
+        }
 
         return `
             <tr style="${estiloExtra}">
@@ -304,7 +320,8 @@ app.get('/tabla', async (req, res) => {
 
     const content = `
         <h2>🏆 Tabla General</h2>
-        <table class= "leaderboard">
+        
+        <table class="leaderboard">
             <thead>
                 <tr>
                     <th>Pos</th>
@@ -320,10 +337,11 @@ app.get('/tabla', async (req, res) => {
         </table>
 
         <div style="margin-top: 20px; padding: 15px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 5px; color: #155724; max-width: 90%;">
-            <strong>⚠️ NUEVA REGLA ACTIVA:</strong>
-            <p style="margin: 5px 0;">
-                Los primeros 8 lugares están reservados EXCLUSIVAMENTE para jugadores con <strong>más de 32 partidas</strong>.
-            </p>
+            <strong>⚠️ REGLAS DE CLASIFICACIÓN (Mínimo 32 partidas):</strong>
+            <ul style="margin-top: 5px; padding-left: 20px;">
+                <li>🔴 <strong>Línea Roja (1-8):</strong> Clasificados Finales.</li>
+                <li>🟢 <strong>Línea Verde (9-10):</strong> Reemplazos oficiales por orden de puntos.</li>
+            </ul>
         </div>
 
         <br>
