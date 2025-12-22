@@ -28,8 +28,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'secreto_super_seguro_para_mi_torne
 // ----------------------------------------------------------------------------
 // 2. MIDDLEWARES (Los "Porteros" del Servidor)
 // ----------------------------------------------------------------------------
-
-// Permite conexiones desde otros dominios (Vital para React/Móvil)
+ 
 app.use(cors());
 
 // Permite leer datos JSON (Para la App Móvil)
@@ -48,9 +47,15 @@ app.use(session({
     saveUninitialized: false
 }));
 
+app.use((req, res, next) => {
+    console.log(`\n🔔 PETICIÓN ENTRANTE: [${req.method}] ${req.url}`);
+    next(); // Deja pasar a la siguiente función
+});
+
 // ----------------------------------------------------------------------------
 // 3. BASE DE DATOS (MongoDB Atlas)
 // ----------------------------------------------------------------------------
+
 
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
@@ -127,171 +132,295 @@ const verificarToken = (req, res, next) => {
 
 // --- A. AUTENTICACIÓN ---
 
+// ==========================================
+// 1. RUTA DE REGISTRO (Lógica de Negocio)
+// ==========================================
 app.post('/api/auth/registro', async (req, res) => {
-    const { telefono, password, nombre } = req.body;
+    const { nombre, telefono, password, rolSeleccionado, claveActivacion } = req.body;
 
+    // A. Validaciones básicas
     if (!telefono || !password || !nombre) {
         return res.status(400).json({ error: 'Faltan datos obligatorios.' });
     }
 
-    const usuarioExistente = await usuariosCollection.findOne({ telefono });
-
-    if (usuarioExistente) {
-        // Si existe y es provisional, lo activamos
-        if (usuarioExistente.es_provisional) {
-            const hashedPassword = await bcrypt.hash(password, 10);
-            await usuariosCollection.updateOne(
-                { telefono },
-                { $set: { password: hashedPassword, nombre: nombre, es_provisional: false } }
-            );
-            return res.json({ mensaje: 'Cuenta recuperada y activada.' });
-        } else {
-            return res.status(400).json({ error: 'El teléfono ya está registrado.' });
-        }
+    // B. Verificar duplicados
+    const existe = await usuariosCollection.findOne({ telefono });
+    if (existe) {
+        return res.status(400).json({ error: 'Este teléfono ya está registrado.' });
     }
 
-    // Crear usuario nuevo
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await usuariosCollection.insertOne({
-        telefono,
-        password: hashedPassword,
+    // C. DEFINICIÓN DEL ROL
+    let rolFinal = 'jugador'; // Por defecto
+
+    // TU NÚMERO DE TELÉFONO (Poder Supremo) 👑
+    // Reemplaza esto con tu número real
+    const MI_TELEFONO_ADMIN = '4432180296'; 
+
+    if (telefono === MI_TELEFONO_ADMIN) {
+        rolFinal = 'admin'; // Tú no necesitas clave, entras directo como dios.
+    } else if (rolSeleccionado === 'organizador') {
+        // Si un mortal quiere ser organizador, PIDE CLAVE 💰
+        if (!claveActivacion) {
+            return res.status(400).json({ error: 'Se requiere Clave de Activación para ser Organizador.' });
+        }
+        
+        // Verificar la clave en la BD
+        const claveValida = await db.collection('claves').findOne({ clave: claveActivacion, usada: false });
+        
+        if (!claveValida) {
+            return res.status(400).json({ error: 'Clave inválida o ya utilizada.' });
+        }
+
+        // Quemar la clave (marcarla como usada)
+        await db.collection('claves').updateOne(
+            { _id: claveValida._id },
+            { $set: { usada: true, usadaPor: telefono, fechaUso: new Date() } }
+        );
+        
+        rolFinal = 'organizador';
+    }
+
+    // D. Crear el usuario
+    const nuevoUsuario = {
         nombre,
-        rol: 'jugador',
-        fechaRegistro: new Date(),
-        es_provisional: false
+        telefono,
+        password: await bcrypt.hash(password, 10),
+        rol: rolFinal,
+        rfidTag: null, // 🔮 Preparado para el futuro (Fase 3.0)
+        activo: true,
+        fechaRegistro: new Date()
+    };
+
+    await usuariosCollection.insertOne(nuevoUsuario);
+
+    // Crear su tabla de puntos inicial
+    await tablaCollection.insertOne({
+        nombre: nombre,
+        telefono: telefono,
+        puntos: 0,
+        ganadas: 0,
+        partidasJugadas: 0,
+        rol: rolFinal
     });
 
-    res.json({ mensaje: 'Usuario registrado exitosamente.' });
+    res.json({ message: 'Usuario registrado con éxito', rol: rolFinal });
 });
 
+// ==========================================
+// 2. RUTA DE LOGIN (CORREGIDA)
+// ==========================================
 app.post('/api/auth/login', async (req, res) => {
     const { telefono, password } = req.body;
 
     const usuario = await usuariosCollection.findOne({ telefono });
+    if (!usuario) {
+        return res.status(400).json({ error: 'Usuario no encontrado' });
+    }
 
-    if (!usuario) return res.status(400).json({ error: 'Usuario no encontrado.' });
-    if (usuario.es_provisional) return res.status(400).json({ error: 'Cuenta no activada.' });
+    const passCorrecto = await bcrypt.compare(password, usuario.password);
+    if (!passCorrecto) {
+        return res.status(400).json({ error: 'Contraseña incorrecta' });
+    }
 
-    const passwordValida = await bcrypt.compare(password, usuario.password);
-    if (!passwordValida) return res.status(400).json({ error: 'Contraseña incorrecta.' });
-
-    // Generar Token
+    // Generar Token con la llave CORRECTA (JWT_SECRET)
     const token = jwt.sign(
-        { id: usuario._id, telefono: usuario.telefono, rol: usuario.rol }, 
-        JWT_SECRET
+        { id: usuario._id, nombre: usuario.nombre, rol: usuario.rol }, 
+        JWT_SECRET, // <--- AQUÍ ESTABA EL ERROR, AHORA COINCIDE CON EL PORTERO
+        { expiresIn: '1h' }
     );
 
-    res.json({ token, nombre: usuario.nombre, rol: usuario.rol });
+    res.json({ 
+        token, 
+        nombre: usuario.nombre, 
+        rol: usuario.rol 
+    });
 });
+
+// --- C. RUTA DE DUEÑO (Generar Claves) ---
+app.post('/api/admin/generar-clave', verificarToken, async (req, res) => {
+    // 1. Verificamos que sea admin (CORREGIDO: 'admin' en minúsculas)
+    if (req.usuario.rol !== 'admin') {
+        return res.status(403).json({ error: 'No eres el Dueño.' });
+    }
+
+    // 2. Generamos clave aleatoria (Ej: K9X-2PL)
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let nuevaClave = '';
+    for (let i = 0; i < 6; i++) {
+        nuevaClave += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+
+    // 3. Guardamos en BD (CORREGIDO: Usamos db.collection directo)
+    try {
+        await db.collection('claves').insertOne({ 
+            clave: nuevaClave, 
+            usada: false, 
+            creadaEn: new Date(),
+            creadaPor: req.usuario.nombre
+        });
+
+        res.json({ message: 'Clave generada', clave: nuevaClave });
+    } catch (error) {
+        console.error('Error al generar clave:', error);
+        res.status(500).json({ error: 'Error interno al guardar la clave' });
+    }
+});
+
+
 
 // --- B. TORNEOS ---
 
+// ==========================================
+// RUTA API: CREAR TORNEO (CON REGLAS DE PUNTOS Y CLASIFICACIÓN) 🏆
+// ==========================================
 app.post('/api/torneos/crear', verificarToken, async (req, res) => {
-    const { nombre, lugar, reglas } = req.body;
-    const organizadorId = req.usuario.id;
+    try {
+        console.log('📡 RECIBIENDO TORNEO COMPLETO...');
+        
+        // 1. Recibimos todos los datos nuevos
+        const { 
+            nombre, sede, precio, 
+            juegos, carambolas, 
+            fechaInicio, fechaFin,
+            puntosGanar, puntosPerder, clasificados 
+        } = req.body;
 
-    if (!nombre || !reglas) return res.status(400).json({ error: 'Faltan datos.' });
+        // 2. Validaciones
+        if (!nombre || !sede || precio === undefined || precio === '') {
+            return res.status(400).json({ error: 'Faltan datos obligatorios.' });
+        }
 
-    const nuevoTorneo = {
-        nombre,
-        lugar: lugar || 'Sede Principal',
-        organizador_id: new ObjectId(organizadorId),
-        fecha_creacion: new Date(),
-        activo: true,
-        reglas: {
-            puntos_ganar: reglas.puntos_ganar || 3,
-            puntos_perder: reglas.puntos_perder || 1,
-            limite_partidas: reglas.limite_partidas || 32,
-            top_clasificados: reglas.top_clasificados || 8,
-            reemplazos: reglas.reemplazos || 2,
-            tipo_juego: reglas.tipo_juego || 'Bola 8'
-        },
-        jugadores_inscritos: []
-    };
+        // 3. Procesar Fechas
+        let inicio = new Date();
+        if (fechaInicio) inicio = new Date(fechaInicio);
 
-    const resultado = await torneosCollection.insertOne(nuevoTorneo);
-    res.json({ mensaje: 'Torneo creado.', torneoId: resultado.insertedId, reglas: nuevoTorneo.reglas });
+        // 4. Armar el objeto FINAL para la Base de Datos
+        const nuevoTorneo = {
+            nombre: nombre,
+            lugar: sede,
+            precio: parseFloat(precio),
+            esAmistoso: parseFloat(precio) === 0,
+            
+            // --- AQUÍ ESTÁN LAS REGLAS NUEVAS ---
+            reglas: {
+                juegosPorEnfrentamiento: parseInt(juegos) || 1,
+                carambolasMeta: parseInt(carambolas) || 30,
+                
+                // Sistema de Puntos
+                puntos_ganar: parseInt(puntosGanar) || 3,  // Ej: 3 pts por ganar
+                puntos_perder: parseInt(puntosPerder) || 0, // Ej: 0 pts por perder
+                
+                // Clasificación
+                top_clasificados: parseInt(clasificados) || 8 // Ej: Pasan los mejores 8
+            },
+            
+            fechas: {
+                inicio: inicio,
+                fin: fechaFin ? new Date(fechaFin) : null
+            },
+
+            organizador_id: new ObjectId(req.usuario.id),
+            organizador_nombre: req.usuario.nombre,
+            estado: 'abierto',
+            jugadores_inscritos: [],
+            creadoEn: new Date()
+        };
+
+        const resultado = await torneosCollection.insertOne(nuevoTorneo);
+        
+        console.log('✅ Torneo configurado y creado. ID:', resultado.insertedId);
+        res.json({ message: 'Torneo creado exitosamente', torneoId: resultado.insertedId });
+
+    } catch (error) {
+        console.error('🔥 Error al crear torneo:', error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+    }
 });
 
-app.post('/api/torneos/inscribir', verificarToken, async (req, res) => {
-    const { torneoId, usuarioId, alias } = req.body;
-
-    if (!torneoId || !usuarioId) return res.status(400).json({ error: 'Faltan IDs.' });
-
-    const existe = await participacionesCollection.findOne({
-        torneo_id: new ObjectId(torneoId),
-        usuario_id: new ObjectId(usuarioId)
-    });
-
-    if (existe) return res.status(400).json({ error: 'El jugador ya está inscrito.' });
-
-    const usuario = await usuariosCollection.findOne({ _id: new ObjectId(usuarioId) });
-    if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado.' });
-
-    const resultado = await participacionesCollection.insertOne({
-        torneo_id: new ObjectId(torneoId),
-        usuario_id: new ObjectId(usuarioId),
-        nombre_display: alias || usuario.nombre,
-        fecha_inscripcion: new Date(),
-        stats: { puntos: 0, partidasJugadas: 0, ganadas: 0, perdidas: 0, totalCarambolas: 0 }
-    });
-
-    res.json({ mensaje: 'Inscrito exitosamente.', participacionId: resultado.insertedId });
-});
 
 // --- C. REGISTRO DE PARTIDAS Y TABLA ---
 
-app.post('/api/partidas/registrar', verificarToken, async (req, res) => {
-    const { torneoId, ganadorId, perdedorId, marcadorGanador, marcadorPerdedor } = req.body;
-
-    if (!torneoId || !ganadorId || !perdedorId) return res.status(400).json({ error: 'Faltan datos.' });
-
+// ==========================================
+// RUTA ACTUALIZADA: REGISTRAR PARTIDO Y SUMAR PUNTOS
+// (Sustituye a tu antigua ruta /api/partidas/registrar)
+// ==========================================
+// index.js - REGISTRO DE PARTIDAS CORREGIDO
+app.post('/api/partidos/registrar-manual', verificarToken, async (req, res) => {
     try {
-        const torneo = await torneosCollection.findOne({ _id: new ObjectId(torneoId) });
-        if (!torneo) return res.status(404).json({ error: 'Torneo no encontrado.' });
+        const { torneoId, jugador1Id, jugador2Id, puntaje1, puntaje2 } = req.body;
 
-        const ptsGanar = torneo.reglas?.puntos_ganar || 3;
-        const ptsPerder = torneo.reglas?.puntos_perder || 1;
+        // 1. VALIDACIÓN ANTISUICIDIO: No jugar contra sí mismo
+        if (jugador1Id === jugador2Id) {
+            return res.status(400).json({ error: 'Un jugador no puede jugar contra sí mismo.' });
+        }
 
-        // Actualizar Ganador
-        await participacionesCollection.updateOne(
-            { _id: new ObjectId(ganadorId) },
-            { $inc: { 
-                "stats.puntos": ptsGanar, 
-                "stats.partidasJugadas": 1, 
-                "stats.ganadas": 1, 
-                "stats.totalCarambolas": parseInt(marcadorGanador || 0) 
-            }}
-        );
+        if (!torneoId || !jugador1Id || !jugador2Id) {
+            return res.status(400).json({ error: 'Faltan datos de los jugadores o torneo.' });
+        }
 
-        // Actualizar Perdedor
-        await participacionesCollection.updateOne(
-            { _id: new ObjectId(perdedorId) },
-            { $inc: { 
-                "stats.puntos": ptsPerder, 
-                "stats.partidasJugadas": 1, 
-                "stats.perdidas": 1, 
-                "stats.totalCarambolas": parseInt(marcadorPerdedor || 0) 
-            }}
-        );
+        const p1 = parseInt(puntaje1) || 0;
+        const p2 = parseInt(puntaje2) || 0;
+        
+        let ganadorId = null;
+        if (p1 > p2) ganadorId = jugador1Id;
+        if (p2 > p1) ganadorId = jugador2Id;
 
-        // Guardar Historial
-        await historialCollection.insertOne({
+        const nuevaPartida = {
             torneo_id: new ObjectId(torneoId),
-            ganador_participacion_id: new ObjectId(ganadorId),
-            perdedor_participacion_id: new ObjectId(perdedorId),
-            marcadorGanador: parseInt(marcadorGanador),
-            marcadorPerdedor: parseInt(marcadorPerdedor),
+            jugador1: jugador1Id, 
+            jugador2: jugador2Id,
+            puntaje1: p1,
+            puntaje2: p2,
+            ganadorId: ganadorId,
             fecha: new Date(),
-            registrado_por: req.usuario.id
-        });
+            tipo: 'manual'
+        };
 
-        res.json({ mensaje: 'Partida registrada correctamente.' });
+        // ✅ CORRECCIÓN: Usamos historialCollection (que es la variable correcta)
+        await historialCollection.insertOne(nuevaPartida);
+
+        // Definimos la función interna para actualizar estadísticas
+        const actualizarJugador = async (idJugador, puntosGanados, carambolasHechas, esGanador) => {
+            await torneosCollection.updateOne(
+                { _id: new ObjectId(torneoId), "jugadores_inscritos.id": idJugador },
+                { 
+                    $inc: { 
+                        "jugadores_inscritos.$.partidosJugados": 1,
+                        "jugadores_inscritos.$.puntos": puntosGanados,
+                        "jugadores_inscritos.$.carambolas": carambolasHechas,
+                        "jugadores_inscritos.$.victorias": (esGanador ? 1 : 0),
+                        "jugadores_inscritos.$.derrotas": (!esGanador ? 1 : 0)
+                    }
+                }
+            );
+        };
+
+        // REGLAS DE PUNTOS: (3 al ganador, 1 por perder)
+        const puntosGanador = 3;
+        const puntosPerdedor = 1; 
+
+        if (ganadorId) {
+            // Hubo un ganador definido
+            await actualizarJugador(jugador1Id, (jugador1Id === ganadorId ? puntosGanador : puntosPerdedor), p1, (jugador1Id === ganadorId));
+            await actualizarJugador(jugador2Id, (jugador2Id === ganadorId ? puntosGanador : puntosPerdedor), p2, (jugador2Id === ganadorId));
+        } else {
+            // Fue Empate (1 punto a cada uno)
+            await actualizarJugador(jugador1Id, 1, p1, false);
+            await actualizarJugador(jugador2Id, 1, p2, false);
+        }
+
+        res.json({ message: 'Partido registrado y tabla actualizada.', partida: nuevaPartida });
+
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Error interno del servidor.' });
+        console.error('🔥 ERROR CRÍTICO:', error);
+        res.status(500).json({ error: 'Error interno: Revisa la consola del servidor.' });
     }
 });
+
+
+// ==========================================
+// RUTA FALTANTE: OBTENER PARTIDOS DE UN TORNEO 📋
+// ==========================================
 
 app.get('/api/torneos/tabla/:id', verificarToken, async (req, res) => {
     const torneoId = req.params.id;
@@ -350,6 +479,103 @@ app.get('/api/torneos/tabla/:id', verificarToken, async (req, res) => {
 
     } catch (e) {
         res.status(500).json({ error: 'Error al obtener tabla.' });
+    }
+});
+
+
+// 👇 PEGA ESTO EN LA SECCIÓN DE API (Antes de las rutas Web)
+
+app.get('/api/tabla-general', async (req, res) => {
+    try {
+        // Obtenemos los datos de la colección "vieja" (Web)
+        const jugadores = await tablaCollection.find().toArray();
+        
+        // Ordenamos por puntos (Mayor a menor)
+        jugadores.sort((a, b) => (b.puntos || 0) - (a.puntos || 0));
+
+        res.json(jugadores);
+    } catch (error) {
+        res.status(500).json({ error: 'Error al obtener la tabla' });
+    }
+});
+
+
+// ==========================================
+// RUTA: CREAR TORNEO (ACTUALIZADA CON HANDICAP)
+// ==========================================
+app.post('/api/torneos/crear', verificarToken, async (req, res) => {
+    try {
+        const { 
+            nombre, sede, precio, tipo, 
+            juegos, carambolas, puntosGanar, puntosPerder,
+            mesasDisponibles, formatoFinal, clasificados, porcentajeMinimo,
+            usaHandicap, 
+            ventajaPorRango, // <--- NUEVO CAMPO (Ej: 2)
+            maxPagos
+        } = req.body;
+
+        if (!nombre || !sede || !tipo) return res.status(400).json({ error: 'Datos incompletos.' });
+
+        const nuevoTorneo = {
+            nombre, lugar: sede, precio: parseFloat(precio) || 0, tipo, esAmistoso: parseFloat(precio) === 0,
+            
+            configuracion: {
+                mesas: parseInt(mesasDisponibles) || 0,
+                formatoFinal: formatoFinal || 'snake',
+            },
+
+            reglas: {
+                juegosPorEnfrentamiento: parseInt(juegos) || 1,
+                carambolasMeta: parseInt(carambolas) || 30,
+                puntos_ganar: parseInt(puntosGanar) || 3,
+                puntos_perder: parseInt(puntosPerder) || 0,
+                top_clasificados: parseInt(clasificados) || 8,
+                
+                usaHandicap: usaHandicap || false,
+                ventajaPorRango: usaHandicap ? (parseInt(ventajaPorRango) || 2) : 0, // Guardamos la regla (2 carambolas)
+                
+                minimoPartidasPorcentaje: tipo === 'liga_sorteo' ? parseFloat(porcentajeMinimo) : null,
+                maxPartidasPagadas: parseInt(maxPagos) || 0 
+            },
+            
+            fechas: { inicio: new Date(), fin: null },
+            organizador_id: new ObjectId(req.usuario.id),
+            estado: 'abierto',
+            jugadores_inscritos: [],
+            creadoEn: new Date()
+        };
+
+        const resultado = await torneosCollection.insertOne(nuevoTorneo);
+        res.json({ message: 'Torneo creado.', torneoId: resultado.insertedId });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error interno.' });
+    }
+});
+
+// ==========================================
+// NUEVA RUTA: EL "BOTÓN DE PÁNICO" (EDITAR REGLAS EN VIVO) 🛠️
+// ==========================================
+app.post('/api/torneos/editar-reglas', verificarToken, async (req, res) => {
+    try {
+        if (req.usuario.rol !== 'organizador') return res.status(403).json({ error: 'No autorizado' });
+
+        const { torneoId, nuevoPorcentaje, nuevosClasificados } = req.body;
+
+        // Solo permitimos editar cosas críticas para salvar el torneo
+        const updateData = {};
+        if (nuevoPorcentaje) updateData['reglas.minimoPartidasPorcentaje'] = parseFloat(nuevoPorcentaje);
+        if (nuevosClasificados) updateData['reglas.top_clasificados'] = parseInt(nuevosClasificados);
+
+        await torneosCollection.updateOne(
+            { _id: new ObjectId(torneoId) },
+            { $set: updateData }
+        );
+
+        res.json({ message: 'Reglas actualizadas correctamente.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error al actualizar reglas' });
     }
 });
 
@@ -854,13 +1080,509 @@ function wrapHTML(content) {
     `;
 }
 
-// ----------------------------------------------------------------------------
-// 8. INICIAR SERVIDOR
-// ----------------------------------------------------------------------------
 
-// Conectamos a BD y luego iniciamos el servidor para evitar errores
+// ==========================================
+// 6. GESTIÓN INTEGRAL: TORNEOS, PARTIDOS E INSCRIPCIONES
+// ==========================================
+
+// A. LISTAR MIS TORNEOS (Filtro por Rol)
+app.get('/api/torneos/mis-torneos', verificarToken, async (req, res) => {
+    try {
+        let filtro = {};
+        if (req.usuario.rol === 'organizador' || req.usuario.rol === 'admin') {
+            filtro = { organizador_id: new ObjectId(req.usuario.id) };
+        } else {
+            filtro = { "jugadores_inscritos.id": req.usuario.id };
+        }
+        const torneos = await torneosCollection.find(filtro).sort({ creadoEn: -1 }).toArray();
+        res.json(torneos);
+    } catch (error) {
+        res.status(500).json({ error: 'Error al obtener torneos' });
+    }
+});
+
+// B. LISTA GENERAL (Para el Dashboard Principal)
+app.get('/api/torneos', async (req, res) => {
+    try {
+        const torneos = await torneosCollection.find().sort({ _id: -1 }).toArray();
+        res.json(torneos);
+    } catch (error) {
+        res.status(500).json({ error: 'Error cargando torneos' });
+    }
+});
+
+// ==========================================
+// RUTA MEJORADA: OBTENER PARTIDOS (VERSIÓN DEBUG) 🐛
+// ==========================================
+app.get('/api/torneos/:id/partidos', async (req, res) => {
+    try {
+        const torneoId = req.params.id;
+        console.log(`\n🔍 APP PIDE PARTIDOS DEL TORNEO: ${torneoId}`);
+
+        // 1. Buscamos las partidas en el HISTORIAL
+        const partidas = await historialCollection
+            .find({ torneo_id: new ObjectId(torneoId) })
+            .sort({ fecha: -1 })
+            .toArray();
+            
+        console.log(`✅ ENCONTRADAS EN DB: ${partidas.length} partidas.`);
+
+        // 2. Buscamos el torneo para obtener el "Diccionario de Nombres"
+        const torneo = await torneosCollection.findOne({ _id: new ObjectId(torneoId) });
+        
+        const nombresMap = {};
+        if (torneo && torneo.jugadores_inscritos) {
+            torneo.jugadores_inscritos.forEach(j => {
+                // Guardamos el ID como string para asegurar coincidencia
+                nombresMap[String(j.id)] = j.nombre;
+            });
+        }
+
+        // 3. "Hidratamos" las partidas
+        const partidasConNombres = partidas.map(p => {
+            // Convertimos a string para buscar en el mapa sin errores de tipo
+            const idJ1 = String(p.jugador1);
+            const idJ2 = String(p.jugador2);
+
+            return {
+                ...p, 
+                // Si no encuentra el nombre, pone el ID para que al menos veamos algo
+                jugador1: { id: p.jugador1, nombre: nombresMap[idJ1] || '⚠️ ' + idJ1.slice(-4) },
+                jugador2: { id: p.jugador2, nombre: nombresMap[idJ2] || '⚠️ ' + idJ2.slice(-4) }
+            };
+        });
+
+        console.log(`📤 ENVIANDO ${partidasConNombres.length} DATOS A LA APP.\n`);
+        res.json(partidasConNombres);
+
+    } catch (error) {
+        console.error('🔥 ERROR CRÍTICO AL LEER PARTIDOS:', error);
+        res.status(500).json({ error: 'Error al cargar los partidos.' });
+    }
+});
+
+// D. INSCRIBIR JUGADOR (Con Validación Anti-Duplicados)
+app.post('/api/torneos/inscribir', verificarToken, async (req, res) => {
+    try {
+        let { torneoId, nombre, telefono } = req.body;
+
+        const torneo = await torneosCollection.findOne({ _id: new ObjectId(torneoId) });
+        if (!torneo) return res.status(404).json({ error: 'Torneo no encontrado.' });
+
+        // Validación: ¿Ya existe el teléfono en este torneo?
+        const yaInscrito = torneo.jugadores_inscritos && torneo.jugadores_inscritos.some(j => j.telefono === telefono);
+        if (yaInscrito) {
+            return res.status(400).json({ error: 'Este jugador ya está inscrito en el torneo.' });
+        }
+
+        // Si viene solo teléfono, buscamos el nombre en usuarios
+        if (!nombre && telefono) {
+            const usuarioExistente = await usuariosCollection.findOne({ telefono });
+            if (usuarioExistente) {
+                nombre = usuarioExistente.nombre;
+            } else {
+                return res.status(400).json({ error: 'El número no está registrado. Ingresa un nombre.' });
+            }
+        }
+
+        if (!torneoId || !nombre || !telefono) {
+            return res.status(400).json({ error: 'Faltan datos obligatorios.' });
+        }
+
+        const nuevoJugador = {
+            id: new ObjectId().toString(),
+            nombre: nombre,
+            telefono: telefono,
+            puntos: 0,
+            partidosJugados: 0,
+            victorias: 0, // Unificamos nombres de campos (victorias vs ganados)
+            derrotas: 0,
+            carambolas: 0,
+            inscritoEn: new Date()
+        };
+
+        await torneosCollection.updateOne(
+            { _id: new ObjectId(torneoId) },
+            { $push: { jugadores_inscritos: nuevoJugador } }
+        );
+
+        res.json({ message: 'Inscripción exitosa.', nuevoJugador });
+
+    } catch (error) {
+        console.error("Error en inscripción:", error);
+        res.status(500).json({ error: 'Error interno al inscribir.' });
+    }
+});
+
+
+// RUTA PARA MIGRAR DATOS (Versión simplificada para correr hoy)
+app.get('/api/admin/migrar-datos/:torneoId', async (req, res) => {
+    // ⚠️ ELIMINAMOS LA VERIFICACIÓN DE ROL POR AHORA
+    // (Ya no usamos req.usuario.rol para que no te de error)
+
+    try {
+        const { torneoId } = req.params;
+
+        console.log("Iniciando migración para torneo:", torneoId);
+
+        // 1. Traemos TODOS los datos de la tabla de la web
+        const jugadoresViejos = await tablaCollection.find({}).toArray();
+
+        if (jugadoresViejos.length === 0) {
+            return res.json({ message: "No se encontraron jugadores en la tabla vieja para migrar." });
+        }
+
+        // 2. Los transformamos
+        const jugadoresMapeados = jugadoresViejos.map(j => ({
+            id: new ObjectId().toString(), 
+            nombre: j.nombre,
+            telefono: j.telefono || '0000000000',
+            puntos: parseInt(j.puntos) || 0,
+            partidosJugados: parseInt(j.jugados) || 0,
+            victorias: parseInt(j.ganadas) || 0,
+            carambolas: 0
+        }));
+
+        // 3. Los insertamos
+        await torneosCollection.updateOne(
+            { _id: new ObjectId(torneoId) },
+            { $set: { jugadores_inscritos: jugadoresMapeados } }
+        );
+
+        res.json({ 
+            message: `¡Migración exitosa! ${jugadoresMapeados.length} jugadores copiados.`,
+            estado: "Revisa tu App Móvil, los datos deben aparecer ahora."
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Error en la migración: ' + error.message });
+    }
+});
+
+// index.js
+
+// =======================================================
+// RUTA CORREGIDA: MIGRAR HISTORIAL (Web Clásica -> App Móvil)
+// =======================================================
+app.get('/api/admin/migrar-historial-partidas/:torneoId', async (req, res) => {
+    try {
+        if (!db) return res.status(500).json({ error: "Base de datos no conectada." });
+
+        const { torneoId } = req.params;
+        const torneoObjectId = new ObjectId(torneoId);
+
+        // 1. Obtenemos el torneo para el diccionario de IDs
+        const torneo = await torneosCollection.findOne({ _id: torneoObjectId });
+        if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
+
+        const mapaJugadores = {};
+        if (torneo.jugadores_inscritos) {
+            torneo.jugadores_inscritos.forEach(j => {
+                if (j.nombre) mapaJugadores[j.nombre.toLowerCase().trim()] = j.id;
+            });
+        }
+
+        // 2. CORRECCIÓN: Buscamos en 'historialPartidas' (tu colección real)
+        // Filtramos solo las partidas viejas (las que no tienen torneo_id asociado)
+        const partidasViejas = await db.collection('historialPartidas')
+            .find({ torneo_id: { $exists: false } }) 
+            .toArray();
+        
+        let partidasImportadas = 0;
+        let errores = 0;
+
+        for (const p of partidasViejas) {
+            // 3. CORRECCIÓN: Mapeamos tus campos viejos (ganador/perdedor)
+            // En tu web vieja guardas: { ganador: "Nombre", perdedor: "Nombre", marcadorGanador: 10, ... }
+            const nombreGanador = p.ganador;
+            const nombrePerdedor = p.perdedor;
+
+            if (!nombreGanador || !nombrePerdedor) continue;
+
+            const idGanador = mapaJugadores[nombreGanador.toLowerCase().trim()];
+            const idPerdedor = mapaJugadores[nombrePerdedor.toLowerCase().trim()];
+
+            // Solo migramos si ambos existen en el torneo nuevo
+            if (idGanador && idPerdedor) {
+                const puntosGanador = parseInt(p.marcadorGanador) || 0;
+                const puntosPerdedor = parseInt(p.marcadorPerdedor) || 0;
+
+                const nuevaPartida = {
+                    torneo_id: torneoObjectId,
+                    jugador1: idGanador, // Asumimos J1 como Ganador para el registro
+                    jugador2: idPerdedor,
+                    puntaje1: puntosGanador,
+                    puntaje2: puntosPerdedor,
+                    ganadorId: idGanador, // Ya sabemos quién ganó
+                    fecha: p.fecha ? new Date(p.fecha) : new Date(),
+                    tipo: 'migracion_historica'
+                };
+
+                await historialCollection.insertOne(nuevaPartida);
+                partidasImportadas++;
+            } else {
+                errores++;
+            }
+        }
+
+        res.json({
+            message: "Migración finalizada.",
+            total_partidas_viejas_encontradas: partidasViejas.length,
+            importadas_a_la_app: partidasImportadas,
+            no_coincidieron_nombres: errores,
+            nota: "Si 'no_coincidieron' es alto, revisa que los nombres en la App sean idénticos a la Web."
+        });
+
+    } catch (error) {
+        console.error("Error migración:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ==========================================
+// 🧮 RECALCULAR ESTADÍSTICAS (MODO BILLAR: SIN EMPATES)
+// Reglas: Ganar = 3 pts, Perder = 1 pt.
+// ==========================================
+app.get('/api/admin/recalcular-stats/:torneoId', async (req, res) => {
+    try {
+        const { torneoId } = req.params;
+        const torneoObjectId = new ObjectId(torneoId);
+
+        // 1. Obtener datos
+        const torneo = await torneosCollection.findOne({ _id: torneoObjectId });
+        if (!torneo) return res.status(404).json({ error: "Torneo no encontrado" });
+
+        const partidas = await historialCollection.find({ torneo_id: torneoObjectId }).toArray();
+
+        // 2. Reiniciar contadores (Eliminamos la columna 'empates')
+        const stats = {};
+        if (torneo.jugadores_inscritos) {
+            torneo.jugadores_inscritos.forEach(j => {
+                stats[j.id] = {
+                    ...j, 
+                    puntos: 0,          
+                    carambolas: 0,      
+                    partidosJugados: 0,
+                    victorias: 0,
+                    derrotas: 0
+                    // Ya no existe 'empates'
+                };
+            });
+        }
+
+        // 3. Procesar lógica estricta (Ganar o Perder)
+        partidas.forEach(p => {
+            const id1 = String(p.jugador1);
+            const id2 = String(p.jugador2);
+            const score1 = parseInt(p.puntaje1) || 0;
+            const score2 = parseInt(p.puntaje2) || 0;
+
+            // Solo procesamos si los jugadores existen en la lista de inscritos
+            if (stats[id1] && stats[id2]) {
+                
+                // CASO 1: JUGADOR 1 GANA
+                if (score1 > score2) {
+                    // J1 Gana
+                    stats[id1].partidosJugados++;
+                    stats[id1].carambolas += score1;
+                    stats[id1].victorias++;
+                    stats[id1].puntos += 3; // 🏆 3 Puntos
+
+                    // J2 Pierde
+                    stats[id2].partidosJugados++;
+                    stats[id2].carambolas += score2;
+                    stats[id2].derrotas++;
+                    stats[id2].puntos += 1; // 💀 1 Punto
+                } 
+                // CASO 2: JUGADOR 2 GANA
+                else if (score2 > score1) {
+                    // J2 Gana
+                    stats[id2].partidosJugados++;
+                    stats[id2].carambolas += score2;
+                    stats[id2].victorias++;
+                    stats[id2].puntos += 3; // 🏆 3 Puntos
+
+                    // J1 Pierde
+                    stats[id1].partidosJugados++;
+                    stats[id1].carambolas += score1;
+                    stats[id1].derrotas++;
+                    stats[id1].puntos += 1; // 💀 1 Punto
+                }
+                // SI SON IGUALES (score1 === score2) NO HACEMOS NADA
+                // Esto evita errores si se guardó un 0-0 por accidente.
+            }
+        });
+
+        // 4. Guardar cambios en la base de datos
+        const jugadoresActualizados = Object.values(stats);
+        
+        // Ordenamos la tabla de una vez (Por Puntos, luego por Carambolas)
+        jugadoresActualizados.sort((a, b) => {
+            if (b.puntos !== a.puntos) return b.puntos - a.puntos;
+            return b.carambolas - a.carambolas;
+        });
+
+        await torneosCollection.updateOne(
+            { _id: torneoObjectId },
+            { $set: { jugadores_inscritos: jugadoresActualizados } }
+        );
+
+        res.json({
+            message: "Estadísticas Billar Recalculadas (Sin Empates).",
+            total_partidas: partidas.length,
+            tabla_posiciones: jugadoresActualizados.map(j => ({
+                nombre: j.nombre,
+                pts: j.puntos,
+                pj: j.partidosJugados,
+                g: j.victorias,
+                p: j.derrotas
+            }))
+        });
+
+    } catch (error) {
+        console.error("Error recalculando:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ==========================================
+// 🧹 HERRAMIENTA DE LIMPIEZA: BORRAR DUPLICADOS
+// ==========================================
+app.get('/api/admin/limpiar-duplicados/:torneoId', async (req, res) => {
+    try {
+        const { torneoId } = req.params;
+        const torneoObjectId = new ObjectId(torneoId);
+
+        // 1. Traer TODAS las partidas del torneo
+        const partidas = await historialCollection.find({ torneo_id: torneoObjectId }).toArray();
+        
+        const firmasVistas = new Set();
+        let duplicadosEncontrados = 0;
+        let partidasBorradas = 0;
+
+        for (const p of partidas) {
+            // Creamos una "firma única" para cada partida basada en sus datos clave
+            // Usamos J1, J2, Puntajes y Fecha (convertida a string para comparar)
+            const firma = `${p.jugador1}-${p.jugador2}-${p.puntaje1}-${p.puntaje2}-${new Date(p.fecha).getTime()}`;
+
+            if (firmasVistas.has(firma)) {
+                // 🚨 ¡Es un duplicado! Ya vimos esta firma antes.
+                // Lo borramos de la base de datos
+                await historialCollection.deleteOne({ _id: p._id });
+                duplicadosEncontrados++;
+                partidasBorradas++;
+            } else {
+                // Es la primera vez que vemos esta partida, la guardamos en el Set
+                firmasVistas.add(firma);
+            }
+        }
+
+        res.json({
+            message: "Limpieza completada.",
+            total_partidas_analizadas: partidas.length,
+            duplicados_eliminados: partidasBorradas,
+            partidas_unicas_restantes: partidas.length - partidasBorradas,
+            instruccion: "AHORA EJECUTA LA RUTA DE 'RECALCULAR-STATS' PARA CORREGIR LA TABLA."
+        });
+
+    } catch (error) {
+        console.error("Error limpieza:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+// ==========================================
+// 🕵️ DETECTIVE DE PUNTOS: AUDITORÍA PASO A PASO
+// ==========================================
+app.get('/api/debug/auditar-jugador/:torneoId/:nombreJugador', async (req, res) => {
+    try {
+        const { torneoId, nombreJugador } = req.params;
+        const torneoObjectId = new ObjectId(torneoId);
+
+        // 1. Buscar las partidas de ese jugador
+        // Usamos Regex para buscar el nombre sin importar mayúsculas
+        const torneo = await torneosCollection.findOne({ _id: torneoObjectId });
+        
+        // Buscar el ID del jugador basado en el nombre que escribiste
+        const jugador = torneo.jugadores_inscritos.find(j => 
+            j.nombre.toLowerCase().includes(nombreJugador.toLowerCase())
+        );
+
+        if (!jugador) return res.status(404).json({ error: "Jugador no encontrado con ese nombre." });
+
+        const partidas = await historialCollection.find({
+            torneo_id: torneoObjectId,
+            $or: [{ jugador1: jugador.id }, { jugador2: jugador.id }]
+        }).toArray();
+
+        // 2. Simulación de la suma paso a paso
+        let auditoria = [];
+        let sumaPuntosLiga = 0;   // Puntos para la tabla (PJ, PG, etc)
+        let sumaCarambolas = 0;   // Puntos anotados en el juego
+
+        partidas.forEach((p, index) => {
+            const soyJ1 = String(p.jugador1) === String(jugador.id);
+            
+            // Convertimos a número para evitar errores de texto
+            const misPuntos = parseInt(soyJ1 ? p.puntaje1 : p.puntaje2) || 0;
+            const rivalPuntos = parseInt(soyJ1 ? p.puntaje2 : p.puntaje1) || 0;
+            
+            let resultado = "";
+            let puntosGanadosEstaPartida = 0;
+
+            if (misPuntos > rivalPuntos) {
+                resultado = "VICTORIA";
+                puntosGanadosEstaPartida = 3; // <--- OJO AQUÍ: ¿ESTO ES LO QUE QUIERES?
+            } else if (misPuntos === rivalPuntos) {
+                resultado = "EMPATE";
+                puntosGanadosEstaPartida = 1;
+            } else {
+                resultado = "DERROTA";
+                puntosGanadosEstaPartida = 0;
+            }
+
+            sumaPuntosLiga += puntosGanadosEstaPartida;
+            sumaCarambolas += misPuntos;
+
+            auditoria.push({
+                partida: index + 1,
+                rival: soyJ1 ? "vs J2" : "vs J1",
+                marcador: `${misPuntos} - ${rivalPuntos}`,
+                resultado: resultado,
+                calculo: `Suma ${puntosGanadosEstaPartida} pts a la tabla.`
+            });
+        });
+
+        res.json({
+            jugador: jugador.nombre,
+            resumen_actual_en_db: {
+                puntos_registrados: jugador.puntos,
+                carambolas_registradas: jugador.carambolas
+            },
+            resumen_calculado_ahora: {
+                puntos_segun_auditoria: sumaPuntosLiga,
+                carambolas_segun_auditoria: sumaCarambolas
+            },
+            DETALLE_PASO_A_PASO: auditoria
+        });
+
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+
+// =======================================================
+// 8. ▶️ INICIALIZACIÓN DEL SERVIDOR
+// =======================================================
+
 connectToDB().then(() => {
-    app.listen(port, () => {
+    // '0.0.0.0' permite que te conectes desde el celular (externo)
+    app.listen(port, '0.0.0.0', () => {
         console.log(`🚀 Servidor corriendo en http://localhost:${port}`);
+        console.log(`📡 Accesible en red: http://192.168.100.6:${port}`);
     });
 });
