@@ -2,7 +2,7 @@
 const { MongoClient } = require('mongodb');
 
 // TU CADENA DE CONEXIÓN
-const uri = "mongodb+srv://144248_db_user:DztPsPwp5EVghI9L@cluster0.25uevze.mongodb.net/TorneoDB?appName=Cluster0";
+const uri = process.env.MONGO_URI;
 
 async function generar() {
     const client = new MongoClient(uri);
